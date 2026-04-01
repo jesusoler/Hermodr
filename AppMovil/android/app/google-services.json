@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "893727018574",
+    "project_id": "hermodr-smr",
+    "storage_bucket": "hermodr-smr.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:893727018574:android:900f2c0d24b668ad99bd1f",
+        "android_client_info": {
+          "package_name": "com.example.hermodr"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBjekeFOKM3HiVK1La7zp9qyU9pZR4gnzY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
