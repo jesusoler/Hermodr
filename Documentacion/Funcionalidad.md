@@ -1,0 +1,2 @@
+## ¿Cómo funciona?
+Bueno, uno de los pros de usar dart y firebase juntos es la posibilidad de crear "streams", siendo estos consultas en constante funcionamiento a los archivos de base de datos que queramos, haciendo que, por ejemplo, el usuario "Test" consulte todos los archivos de conexión de la colección "links" a los que pertenezca en el campo "users", y cuando el campo "message.sent" cambie a enviado, empezará todo el proceso de la app.  
