@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'auth_login.dart';
+import 'home.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -58,7 +59,11 @@ class _LoginScreenState extends State<LoginScreen> {
                   );
 
                   if (user != null) {
-                    print("✅ Login correcto!");
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(builder: (context) => const HomeScreen()),
+                    );
+              
                   } else {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text("Error: Usuario o contraseña incorrectos"))
