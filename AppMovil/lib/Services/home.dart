@@ -33,11 +33,12 @@ class _HomeScreenState extends State<HomeScreen> {
           for (var doc in snapshot.data!.docs) {
             var data = doc.data() as Map<String, dynamic>;
             var message = data['Message'];
-
+            String docId = doc.id;
+            
             if (message['Sent'] == true && message['Last_Sent'] != myUID) {
               
               Future.delayed(Duration.zero, () {
-                _getGreeting(context, message['Last_Sent']);
+                _getGreeting(context, message['Last_Sent'], docId);
               });
             }
           }
@@ -50,7 +51,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _getGreeting(BuildContext context, String emisor) {
+  void _getGreeting(BuildContext context, String emisor, String docId) async {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text("¡Has recibido un saludo de $emisor!"),
@@ -58,15 +59,15 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     // Devolver el estado de Message.Sent a false para esperar al siguiente mensaje
-    try {
+  try {
     await FirebaseFirestore.instance
-        .collection('links')
-        .doc(docId)
-        .update({
-          'Message.Sent': false,
-        });
+      .collection('links')
+      .doc(docId)
+      .update({
+        'Message.Sent': false,
+      });
   } catch (e) {
     print("Error al resetear: $e");
   }
-  }
+}
 }
