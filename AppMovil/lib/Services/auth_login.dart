@@ -28,7 +28,6 @@ class AuthLogin {
     }
       return user;
     } catch (e) {
-      print ("Error en un registro $e");
       return null;
     }
   }
@@ -41,7 +40,6 @@ class AuthLogin {
           email: email, password: password);
       return res.user;
     } catch (e) {
-      print("Error en login: $e");
       return null;
     }
   }

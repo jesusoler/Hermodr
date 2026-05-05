@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart' as firebase_options; 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'Services/login_screen.dart';
+import 'Services/home.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,7 +27,18 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
-      home: const LoginScreen(),
+      home: StreamBuilder<User?>(
+        stream: FirebaseAuth.instance.authStateChanges(), // Comprobamos si existe un token de sesión almacenado
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasData) {
+            return const HomeScreen(); // Si tiene el token, entra directo
+          }
+          return const LoginScreen(); // Si no, entra al login
+        },
+      ),
     );
   }
 }
