@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'auth_login.dart';
 import 'home.dart';
-
+import 'create_screen.dart';
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -18,7 +18,6 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Login")),
       body: Padding(
         padding: const EdgeInsets.all(20.0),
         child: Column(
@@ -73,6 +72,15 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: const Text("INICIAR SESIÓN"),
               ),
             ),
+              TextButton(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const CreateScreen()),
+                  );
+                },
+                child: const Text("¿No tienes cuenta? Regístrate aquí"),
+              )
           ],
         ),
       ),
