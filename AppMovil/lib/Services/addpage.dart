@@ -1,6 +1,10 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class AddPage extends StatefulWidget {
   const AddPage({super.key});
@@ -12,6 +16,141 @@ class AddPage extends StatefulWidget {
 class _AddPageState extends State<AddPage> {
   final _emailController = TextEditingController();
   final String myUID = FirebaseAuth.instance.currentUser!.uid;
+
+  // Variables para BLE
+  bool _showBleList = false;
+  bool _isScanning = false;
+  List<ScanResult> _scanResults = [];
+  StreamSubscription? _scanSubscription;
+
+  // Diálogo informativo para permisos/estado de Bluetooth
+  void _showPermissionDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Permisos de Bluetooth"),
+        content: const Text("No tienes el permiso para usar bluetooth activado"),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancelar"),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await openAppSettings(); // Abre la configuración del sistema
+            },
+            child: const Text("Ir a ajustes"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- LÓGICA BLE ---
+
+  void _startScan() async {
+    // Solicitar permisos al sistema (esto activa el pop-up oficial)
+    List<Permission> permissions = [];
+    if (Platform.isAndroid) {
+      permissions = [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+        Permission.location,
+      ];
+    } else if (Platform.isIOS) {
+      permissions = [Permission.bluetooth];
+    }
+
+    Map<Permission, PermissionStatus> statuses = await permissions.request();
+
+    // Si el usuario deniega los permisos necesarios
+    if (statuses.values.any((status) => status.isDenied || status.isPermanentlyDenied)) {
+      _showPermissionDialog();
+      return;
+    }
+
+    if (await FlutterBluePlus.isSupported == false) return;
+
+    // Comprobar si el Bluetooth está encendido y tiene permisos
+    BluetoothAdapterState state = await FlutterBluePlus.adapterState.first;
+    if (state != BluetoothAdapterState.on) {
+      _showPermissionDialog();
+      return;
+    }
+    
+    setState(() {
+      _showBleList = true;
+      _isScanning = true;
+      _scanResults = [];
+    });
+
+    _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
+      if (mounted) {
+        setState(() {
+          // Filtramos dispositivos que tengan nombre para no llenar la lista de basura
+          _scanResults = results.where((r) => r.device.platformName.isNotEmpty).toList();
+        });
+      }
+    });
+
+    try {
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+    } catch (e) {
+      _screenMsg("Error al escanear: $e", isError: true);
+    }
+
+    await FlutterBluePlus.isScanning.where((val) => val == false).first;
+    if (mounted) setState(() => _isScanning = false);
+  }
+
+  void _stopScan() {
+    FlutterBluePlus.stopScan();
+    _scanSubscription?.cancel();
+    setState(() {
+      _showBleList = false;
+      _isScanning = false;
+    });
+  }
+
+  void _connectAndAddBand(BluetoothDevice device) async {
+    try {
+      // En BLE a veces es necesario conectar para asegurar la estabilidad del ID, 
+      // aunque para obtener la MAC (RemoteId) el escaneo suele bastar.
+      
+      DocumentSnapshot userDoc = await FirebaseFirestore.instance.collection('users').doc(myUID).get();
+      var userData = userDoc.data() as Map<String, dynamic>? ?? {};
+      
+      // Buscamos el siguiente índice disponible para BandN
+      int i = 1;
+      while (userData.containsKey('Band$i')) {
+        i++;
+      }
+      String bandKey = 'Band$i';
+
+      await FirebaseFirestore.instance.collection('users').doc(myUID).update({
+        bandKey: {
+          'Band_Name': device.platformName,
+          'MAC': device.remoteId.str,
+          'Destiny_LinkID': '',
+        }
+      });
+
+      _screenMsg("Pulsera vinculada como $bandKey", isError: false);
+      _stopScan();
+    } catch (e) {
+      _screenMsg("Error al vincular: $e", isError: true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _scanSubscription?.cancel();
+    _emailController.dispose();
+    super.dispose();
+  }
+
+  // --- LÓGICA AMIGOS ---
 
   void _sendRequest() async {
     String email = _emailController.text.trim().toLowerCase();
@@ -114,6 +253,47 @@ class _AddPageState extends State<AddPage> {
 
   @override //Botones de la página "añadir"
   Widget build(BuildContext context) {
+    if (_showBleList) {
+      return Column(
+        children: [
+          ListTile(
+            title: const Text("Buscando pulseras...", style: TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: Text(_isScanning ? "Asegúrate de que el Bluetooth esté activo" : "Escaneo finalizado"),
+            trailing: _isScanning 
+              ? const CircularProgressIndicator() 
+              : IconButton(icon: const Icon(Icons.refresh), onPressed: _startScan),
+          ),
+          Expanded(
+            child: ListView.builder(
+              itemCount: _scanResults.length,
+              itemBuilder: (context, index) {
+                final res = _scanResults[index];
+                return Card(
+                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: ListTile(
+                    leading: const Icon(Icons.bluetooth),
+                    title: Text(res.device.platformName),
+                    subtitle: Text(res.device.remoteId.str),
+                    trailing: ElevatedButton(
+                      onPressed: () => _connectAndAddBand(res.device),
+                      child: const Text("Vincular"),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: TextButton(
+              onPressed: _stopScan,
+              child: const Text("Cancelar", style: TextStyle(color: Colors.red)),
+            ),
+          )
+        ],
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.all(20.0),
       child: Column(
@@ -132,7 +312,7 @@ class _AddPageState extends State<AddPage> {
               title: "AÑADIR PULSERA",
               icon: Icons.watch,
               color: Colors.green,
-              onTap: () => print("Próximamente pulseras"),
+              onTap: _startScan,
             ),
           ),
         ],

@@ -1,8 +1,17 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'friendpage.dart';
+import 'profile.dart'; // Import the new profile page
 import 'addpage.dart';
+
+// UUIDs para la comunicación con el Hardware (Ajustar según tu Arduino)
+const String SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+const String CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -14,6 +23,50 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final String myUID = FirebaseAuth.instance.currentUser!.uid;
   int _selectedIndex = 0;
+  StreamSubscription<QuerySnapshot>? _greetingSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _setupNotifications();
+    _listenForGreetings();
+  }
+
+  void _setupNotifications() async {
+    FirebaseMessaging messaging = FirebaseMessaging.instance;
+
+    // 1. Solicitar permisos (especialmente importante en iOS y Android 13+)
+    NotificationSettings settings = await messaging.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+
+    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+      // 2. Obtener el token único del dispositivo
+      String? token = await messaging.getToken();
+      if (token != null) {
+        // 3. Guardarlo en el perfil del usuario en Firestore
+        await FirebaseFirestore.instance.collection('users').doc(myUID).update({'Token_FCM': token});
+      }
+    }
+  }
+
+  void _listenForGreetings() {
+    _greetingSubscription = FirebaseFirestore.instance
+        .collection('links')
+        .where('Users', arrayContains: myUID)
+        .snapshots()
+        .listen((snapshot) {
+      for (var doc in snapshot.docs) {
+        var data = doc.data() as Map<String, dynamic>;
+        var message = data['Message'];
+        if (message != null && message['Sent'] == true && message['Last_Sent'] != myUID) {
+          _getGreeting(context, message['Last_Sent'], doc.id);
+        }
+      }
+    });
+  }
 
   void _sendGreeting(String docId) async {
     try {
@@ -31,23 +84,81 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _getGreeting(BuildContext context, String senderUID, String docId) async {
-    String senderName = senderUID; 
     try {
-      DocumentSnapshot userDoc = await FirebaseFirestore.instance.collection('users').doc(senderUID).get();
-      if (userDoc.exists) {
-        var userData = userDoc.data() as Map<String, dynamic>;
-        senderName = userData['Name'] ?? senderUID;
-      }
+      // Obtenemos los datos del vínculo y del remitente
+      var linkDoc = await FirebaseFirestore.instance.collection('links').doc(docId).get();
+      var senderDoc = await FirebaseFirestore.instance.collection('users').doc(senderUID).get();
+      
+      if (!mounted) return;
+
+      var linkData = linkDoc.data() as Map<String, dynamic>;
+      var myConfig = linkData['Config_$myUID'] ?? {};
+      String color = myConfig['Color'] ?? "Blanco";
+      String bandKey = myConfig['BandKey'] ?? ""; // Aquí leemos qué pulsera debe vibrar
+      String senderName = senderDoc.exists ? (senderDoc.data() as Map)['Name'] : "Alguien";
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text("¡Has recibido un saludo de $senderName!"),
           backgroundColor: Colors.deepPurple,
         ),
       );
-      await FirebaseFirestore.instance.collection('links').doc(docId).update({'Message.Sent': false});
+
+      // Si hay una pulsera asignada, intentamos el envío BLE
+      if (bandKey.isNotEmpty) {
+        _relayToPhysicalBand(bandKey, color);
+      }
+
+      await FirebaseFirestore.instance.collection('links').doc(docId).update({
+        'Message.Sent': false
+      });
     } catch (e) {
-      print("Error al resetear: $e");
+      print("Error al procesar saludo: $e");
     }
+  }
+
+  Future<void> _relayToPhysicalBand(String bandKey, String colorName) async {
+    try {
+      // 1. Buscamos la MAC de esa pulsera en nuestro perfil
+      var userDoc = await FirebaseFirestore.instance.collection('users').doc(myUID).get();
+      var userData = userDoc.data() as Map<String, dynamic>;
+      String? targetMac = userData[bandKey]?['MAC'];
+
+      if (targetMac == null || targetMac.isEmpty) return;
+
+      // 2. Escaneamos para encontrarla
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 4));
+      var subscription = FlutterBluePlus.scanResults.listen((results) async {
+        for (ScanResult r in results) {
+          if (r.device.remoteId.str == targetMac) {
+            await FlutterBluePlus.stopScan();
+            
+            // 3. Conectamos y enviamos el color
+            await r.device.connect();
+            var services = await r.device.discoverServices();
+            for (var s in services) {
+              if (s.uuid.toString() == SERVICE_UUID) {
+                for (var c in s.characteristics) {
+                  if (c.uuid.toString() == CHARACTERISTIC_UUID) {
+                    await c.write(utf8.encode(colorName));
+                  }
+                }
+              }
+            }
+            await r.device.disconnect();
+            break;
+          }
+        }
+      });
+    } catch (e) {
+      print("Error BLE: $e");
+    }
+  }
+
+  @override
+  void dispose() {
+    _greetingSubscription?.cancel();
+    super.dispose();
   }
 
   @override
@@ -56,35 +167,13 @@ class _HomeScreenState extends State<HomeScreen> {
       BandsMenu(myUID: myUID),
       FriendPage(myUID: myUID, onSendGreeting: _sendGreeting),
       const AddPage(),
-      const Center(child: Text("Próximamente: Perfil")),
+      const ProfilePage(), // Use the new ProfilePage
     ];
 
     return Scaffold(
       appBar: AppBar(title: const Text("Envíos")),
       body: Stack(
-        children: [
-          SizedBox(
-            height: 0,
-            child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance.collection('links').where('Users', arrayContains: myUID).snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.hasData) {
-                  for (var doc in snapshot.data!.docs) {
-                    var data = doc.data() as Map<String, dynamic>;
-                    var message = data['Message'];
-                    if (message['Sent'] == true && message['Last_Sent'] != myUID) {
-                      Future.delayed(Duration.zero, () {
-                        _getGreeting(context, message['Last_Sent'], doc.id);
-                      });
-                    }
-                  }
-                }
-                return const SizedBox.shrink();
-              },
-            ),
-          ),
-          _pages[_selectedIndex],
-        ],
+        children: [_pages[_selectedIndex]],
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
@@ -145,53 +234,6 @@ class BandsMenu extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  // --- DIÁLOGO PARA CAMBIAR COLOR ---
-  void _editBandColor(BuildContext context, String linkID) {
-    if (linkID.isEmpty) return;
-    List<String> colors = ['Rojo', 'Azul', 'Verde', 'Amarillo', 'Morado', 'Naranja', 'Rosa'];
-    
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Color de Notificación"),
-        content: Wrap(
-          alignment: WrapAlignment.center,
-          spacing: 15,
-          runSpacing: 15,
-          children: colors.map((color) => GestureDetector(
-            onTap: () async {
-              await FirebaseFirestore.instance.collection('links').doc(linkID).update({
-                'Config_$myUID.Color': color
-              });
-              if (context.mounted) Navigator.pop(context);
-            },
-            child: Container(
-              width: 45, height: 45,
-              decoration: BoxDecoration(
-                color: _colorFromName(color),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.black26, width: 2),
-              ),
-            ),
-          )).toList(),
-        ),
-      ),
-    );
-  }
-
-  static Color _colorFromName(String name) {
-    switch (name.toLowerCase()) {
-      case 'rojo': return Colors.red;
-      case 'azul': return Colors.blue;
-      case 'verde': return Colors.green;
-      case 'amarillo': return Colors.yellow;
-      case 'morado': return Colors.purple;
-      case 'naranja': return Colors.orange;
-      case 'rosa': return Colors.pink;
-      default: return Colors.blueGrey;
-    }
   }
 
   void _showFriendSelector(BuildContext context, String bandKey) {
@@ -307,10 +349,6 @@ class BandsMenu extends StatelessWidget {
                             ),
                           ),
                         ),
-                        GestureDetector( // Click en el cuadro de color
-                          onTap: () => _editBandColor(context, destinyID),
-                          child: _LinkColorBox(linkID: destinyID, myUID: myUID),
-                        ),
                       ],
                     ),
                     const Divider(height: 25),
@@ -330,39 +368,6 @@ class BandsMenu extends StatelessWidget {
               ),
             );
           },
-        );
-      },
-    );
-  }
-}
-
-class _LinkColorBox extends StatelessWidget {
-  final String linkID;
-  final String myUID;
-  const _LinkColorBox({required this.linkID, required this.myUID});
-
-  @override
-  Widget build(BuildContext context) {
-    if (linkID.isEmpty) {
-      return Container(
-        width: 35, height: 35, 
-        decoration: BoxDecoration(color: Colors.grey.shade200, borderRadius: BorderRadius.circular(8))
-      );
-    }
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance.collection('links').doc(linkID).snapshots(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData || !snapshot.data!.exists) return const SizedBox(width: 35, height: 35);
-        var data = snapshot.data!.data() as Map<String, dynamic>;
-        String colorName = data['Config_$myUID']?['Color'] ?? "Gris";
-        return Container(
-          width: 35, height: 35,
-          decoration: BoxDecoration(
-            color: BandsMenu._colorFromName(colorName), 
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.black12)
-          ),
-          child: const Icon(Icons.palette, size: 16, color: Colors.white54),
         );
       },
     );
