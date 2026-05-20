@@ -17,11 +17,6 @@ class AuthLogin {
         'Name': nombre,
         'Email': email,
         'UID': user.uid,
-        'Band1': {
-          'Band_Name': '',
-          'MAC': '',
-          'Destiny_LinkID': ''
-        },
         'Token_FCM': '',
         'Profile_Pic': ''
       });

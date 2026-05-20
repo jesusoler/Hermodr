@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'friendpage.dart';
 import 'profile.dart'; // Import the new profile page
 import 'addpage.dart';
@@ -104,8 +105,10 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
 
-      // Si hay una pulsera asignada, intentamos el envío BLE
-      if (bandKey.isNotEmpty) {
+      // Si el destino es 'mobile', disparamos notificación de sistema. Si es una pulsera, BLE.
+      if (bandKey == 'mobile') {
+        _showLocalNotification(senderName);
+      } else if (bandKey.isNotEmpty) {
         _relayToPhysicalBand(bandKey, color);
       }
 
@@ -117,39 +120,92 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // Función para mostrar una notificación estándar de Android/iOS
+  Future<void> _showLocalNotification(String senderName) async {
+    final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+    
+    const androidDetails = AndroidNotificationDetails(
+      'greetings_channel',
+      'Saludos recibidos',
+      channelDescription: 'Notificaciones cuando recibes un saludo de un amigo',
+      importance: Importance.max,
+      priority: Priority.high,
+      showWhen: true,
+    );
+
+    const notificationDetails = NotificationDetails(
+      android: androidDetails,
+      iOS: DarwinNotificationDetails(),
+    );
+
+    await flutterLocalNotificationsPlugin.show(
+      DateTime.now().millisecond, // ID único para no sobreescribir anteriores
+      '¡Hermodr!',
+      'Has recibido un saludo de $senderName',
+      notificationDetails,
+    );
+  }
+
   Future<void> _relayToPhysicalBand(String bandKey, String colorName) async {
     try {
       // 1. Buscamos la MAC de esa pulsera en nuestro perfil
       var userDoc = await FirebaseFirestore.instance.collection('users').doc(myUID).get();
       var userData = userDoc.data() as Map<String, dynamic>;
-      String? targetMac = userData[bandKey]?['MAC'];
+      // Obtenemos la MAC (RemoteId) guardada en el perfil del usuario
+      final String? targetMac = userData[bandKey]?['MAC'];
 
-      if (targetMac == null || targetMac.isEmpty) return;
+      if (targetMac == null || targetMac.isEmpty) {
+        print("BLE Error: No hay MAC asociada a la pulsera seleccionada ($bandKey)");
+        return;
+      }
 
-      // 2. Escaneamos para encontrarla
-      FlutterBluePlus.startScan(timeout: const Duration(seconds: 4));
-      var subscription = FlutterBluePlus.scanResults.listen((results) async {
-        for (ScanResult r in results) {
-          if (r.device.remoteId.str == targetMac) {
-            await FlutterBluePlus.stopScan();
-            
-            // 3. Conectamos y enviamos el color
-            await r.device.connect();
-            var services = await r.device.discoverServices();
-            for (var s in services) {
-              if (s.uuid.toString() == SERVICE_UUID) {
-                for (var c in s.characteristics) {
-                  if (c.uuid.toString() == CHARACTERISTIC_UUID) {
-                    await c.write(utf8.encode(colorName));
-                  }
-                }
+      print("BLE Relay: Iniciando búsqueda de MAC: $targetMac");
+
+      BluetoothDevice? targetDevice;
+
+      // 1. Comprobar si ya está conectado (más rápido)
+      List<BluetoothDevice> connected = FlutterBluePlus.connectedDevices;
+      for (var d in connected) {
+        if (d.remoteId.str.toLowerCase() == targetMac.toLowerCase()) {
+          targetDevice = d;
+          break;
+        }
+      }
+
+      // 2. Si no, escaneamos para encontrarla
+      if (targetDevice == null) {
+        await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
+        await for (var results in FlutterBluePlus.scanResults) {
+          for (ScanResult r in results) {
+            if (r.device.remoteId.str.toLowerCase() == targetMac.toLowerCase()) {
+              targetDevice = r.device;
+              await FlutterBluePlus.stopScan();
+              break;
+            }
+          }
+          if (targetDevice != null) break;
+        }
+      }
+
+      if (targetDevice != null) {
+        // 3. Conectamos y enviamos el color al prototipo
+        await targetDevice.connect(timeout: const Duration(seconds: 5));
+        var services = await targetDevice.discoverServices();
+        for (var s in services) {
+          if (s.uuid.toString().toLowerCase() == SERVICE_UUID.toLowerCase()) {
+            for (var c in s.characteristics) {
+              if (c.uuid.toString().toLowerCase() == CHARACTERISTIC_UUID.toLowerCase()) {
+                await c.write(utf8.encode(colorName));
+                print("BLE Success: Datos enviados a $targetMac");
               }
             }
-            await r.device.disconnect();
-            break;
           }
         }
-      });
+        // Desconectamos para liberar el dispositivo y ahorrar batería
+        await targetDevice.disconnect();
+      } else {
+        print("BLE Error: No se encontró el dispositivo con MAC $targetMac");
+      }
     } catch (e) {
       print("Error BLE: $e");
     }
@@ -230,6 +286,29 @@ class BandsMenu extends StatelessWidget {
               if (context.mounted) Navigator.pop(context);
             },
             child: const Text("Guardar"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _deleteBand(BuildContext context, String bandKey) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Eliminar Pulsera"),
+        content: const Text("¿Estás seguro de que quieres eliminar esta pulsera?"),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancelar")),
+          ElevatedButton(
+            onPressed: () async {
+              await FirebaseFirestore.instance.collection('users').doc(myUID).update({
+                bandKey: FieldValue.delete(),
+              });
+              if (context.mounted) Navigator.pop(context);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            child: const Text("Eliminar"),
           ),
         ],
       ),
@@ -348,6 +427,10 @@ class BandsMenu extends StatelessWidget {
                               ),
                             ),
                           ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                          onPressed: () => _deleteBand(context, key),
                         ),
                       ],
                     ),

@@ -20,8 +20,8 @@ class FriendPage extends StatelessWidget {
       WriteBatch batch = FirebaseFirestore.instance.batch();
 
       batch.set(FirebaseFirestore.instance.collection('links').doc(linkId), {
-        'Config_$myUID': {'Color': ''},
-        'Config_$friendUID': {'Color': ''},
+        'Config_$myUID': {'Color': 'Azul', 'BandKey': 'mobile'}, // Por defecto notifica al móvil
+        'Config_$friendUID': {'Color': 'Azul', 'BandKey': 'mobile'}, // Por defecto notifica al móvil
         'LinkID': linkId,
         'Message': {
           'Last_Second': FieldValue.serverTimestamp(),
@@ -92,19 +92,19 @@ class FriendPage extends StatelessWidget {
                       const SizedBox(height: 20),
                       const Text("Pulsera destino:", style: TextStyle(fontWeight: FontWeight.bold)),
                       const SizedBox(height: 10),
-                      if (bandKeys.isEmpty)
-                        const Text("No tienes pulseras vinculadas.", style: TextStyle(fontSize: 12, color: Colors.grey)) // Mensaje si no hay pulseras
-                      else
-                        DropdownButton<String>(
-                          isExpanded: true,
-                          value: selectedBand.isEmpty ? null : selectedBand,
-                          hint: const Text("Seleccionar pulsera"),
-                          items: bandKeys.map((key) {
+                      DropdownButton<String>(
+                        isExpanded: true,
+                        value: selectedBand.isEmpty ? 'mobile' : selectedBand,
+                        hint: const Text("Seleccionar pulsera"),
+                        items: [
+                          const DropdownMenuItem(value: 'mobile', child: Text("Solo móvil")),
+                          ...bandKeys.map((key) {
                             return DropdownMenuItem(
                               value: key,
-                              child: Text(userData[key]['Band_Name'] ?? key), // Muestra el nombre de la pulsera o su clave
+                              child: Text(userData[key]['Band_Name'] ?? key),
                             );
                           }).toList(),
+                        ],
                           onChanged: (val) {
                             FirebaseFirestore.instance.collection('links').doc(linkID).update({'Config_$myUID.BandKey': val});
                           },
@@ -332,10 +332,10 @@ class _FriendLinkControls extends StatelessWidget {
                 Expanded( // Dropdown para la selección de pulsera
                   child: DropdownButton<String>(
                     isExpanded: true,
-                    value: selectedBandKey.isEmpty ? null : selectedBandKey,
+                    value: selectedBandKey.isEmpty ? 'mobile' : selectedBandKey,
                     hint: const Text("Seleccionar pulsera"),
                     items: [
-                      const DropdownMenuItem(value: '', child: Text("Sin asignar")), // Opción para desasignar
+                      const DropdownMenuItem(value: 'mobile', child: Text("Solo móvil")),
                       ...bandKeys.map((key) {
                         return DropdownMenuItem(
                           value: key,
