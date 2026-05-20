@@ -42,7 +42,7 @@ class FriendPage extends StatelessWidget {
   }
 
   // --- DIÁLOGO PARA CAMBIAR COLOR ---
-  void _editBandColor(BuildContext context, String linkID) {
+  static void _editBandColor(BuildContext context, String linkID, String myUID) { // myUID añadido
     if (linkID.isEmpty) return;
     final List<String> colors = ['Rojo', 'Azul', 'Verde', 'Amarillo', 'Morado', 'Naranja', 'Rosa']; // Lista de colores disponibles
     
@@ -252,26 +252,37 @@ class FriendPage extends StatelessWidget {
                         friendName = userData['Name'] ?? "No se ha encontrado nombre";
                       }
 
+                      // Nuevo diseño para cada amigo
                       return Card(
                         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        child: ListTile(
-                          leading: const CircleAvatar(child: Icon(Icons.person)),
-                          title: Text(friendName),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
+                        child: Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center, // Alinea verticalmente los elementos
                             children: [
-                              const Text(
-                                "Configura las notificaciones",
-                                style: TextStyle(fontSize: 12, color: Colors.grey),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min, // La columna ocupa el mínimo espacio vertical
+                                  children: [
+                                    Text(
+                                      friendName,
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                      textAlign: TextAlign.left,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _FriendLinkControls(linkID: docId, myUID: myUID), // Nuevo widget para los controles
+                                  ],
+                                ),
                               ),
-                              const SizedBox(width: 8), // Espacio entre el texto y el botón de color
-                              GestureDetector( // Click en el cuadro de color
-                                onTap: () => _editBandColor(context, docId),
-                                child: _LinkColorBox(linkID: docId, myUID: myUID),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.send, color: Colors.deepPurpleAccent),
-                                onPressed: () => onSendGreeting(docId),
+                              const SizedBox(width: 8), // Espacio entre los controles y el botón de enviar
+                              Container( // Botón de enviar ocupando toda la altura
+                                height: 70, // Altura fija para el área del botón
+                                alignment: Alignment.center,
+                                child: IconButton(
+                                  icon: const Icon(Icons.send, color: Colors.deepPurpleAccent, size: 30),
+                                  onPressed: () => onSendGreeting(docId),
+                                ),
                               ),
                             ],
                           ),
@@ -285,6 +296,68 @@ class FriendPage extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+// Nuevo widget para los controles de cada vínculo de amigo (selector de pulsera y color)
+class _FriendLinkControls extends StatelessWidget {
+  final String linkID;
+  final String myUID;
+
+  const _FriendLinkControls({
+    required this.linkID,
+    required this.myUID,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance.collection('users').doc(myUID).snapshots(),
+      builder: (context, userSnap) {
+        if (!userSnap.hasData || !userSnap.data!.exists) return const SizedBox.shrink();
+        var userData = userSnap.data!.data() as Map<String, dynamic>;
+        var bandKeys = userData.keys.where((k) => k.startsWith('Band')).toList()..sort();
+
+        return StreamBuilder<DocumentSnapshot>(
+          stream: FirebaseFirestore.instance.collection('links').doc(linkID).snapshots(),
+          builder: (context, linkSnap) {
+            if (!linkSnap.hasData || !linkSnap.data!.exists) return const SizedBox.shrink();
+            var config = linkSnap.data!['Config_$myUID'] as Map<String, dynamic>? ?? {};
+            String selectedBandKey = config['BandKey'] ?? "";
+
+            return Row(
+              mainAxisAlignment: MainAxisAlignment.start, // Alinea los controles al inicio
+              children: [
+                Expanded( // Dropdown para la selección de pulsera
+                  child: DropdownButton<String>(
+                    isExpanded: true,
+                    value: selectedBandKey.isEmpty ? null : selectedBandKey,
+                    hint: const Text("Seleccionar pulsera"),
+                    items: [
+                      const DropdownMenuItem(value: '', child: Text("Sin asignar")), // Opción para desasignar
+                      ...bandKeys.map((key) {
+                        return DropdownMenuItem(
+                          value: key,
+                          child: Text(userData[key]['Band_Name'] ?? key), // Muestra el nombre de la pulsera o su clave
+                        );
+                      }).toList(),
+                    ],
+                    onChanged: (val) {
+                      FirebaseFirestore.instance.collection('links').doc(linkID).update({'Config_$myUID.BandKey': val});
+                    },
+                  ),
+                ),
+                const SizedBox(width: 8), // Espacio entre el dropdown y el cuadro de color
+                GestureDetector( // Cuadro de color
+                  onTap: () => FriendPage._editBandColor(context, linkID, myUID), // Llama al método estático
+                  child: _LinkColorBox(linkID: linkID, myUID: myUID),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }
