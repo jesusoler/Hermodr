@@ -14,6 +14,7 @@ import '../firebase_options.dart' as firebase_options;
 
 // Identificadores constantes
 const String _channelId = 'hermodr_foreground';
+const String _alertChannelId = 'greetings_channel'; // Nuevo canal para alertas
 const int _notificationId = 888;
 const String SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
 const String CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
@@ -31,12 +32,21 @@ Future<void> initializeService() async {
     importance: Importance.low,
   );
 
+  const AndroidNotificationChannel alertChannel = AndroidNotificationChannel(
+    _alertChannelId,
+    'Saludos recibidos',
+    description: 'Notificaciones cuando recibes un saludo de un amigo.',
+    importance: Importance.max, // Máxima importancia para que aparezca el popup
+    playSound: true,
+    enableVibration: true,
+  );
+
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
   if (Platform.isAndroid) {
-    await flutterLocalNotificationsPlugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(channel);
+    final androidPlugin = flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    await androidPlugin?.createNotificationChannel(channel);
+    await androidPlugin?.createNotificationChannel(alertChannel); // Registramos el nuevo canal
   }
 
   await service.configure(
@@ -68,11 +78,16 @@ void onStart(ServiceInstance service) async {
 
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
-  // Escuchamos el evento de detener el servicio que viene de la acción de la notificación
-  service.on('stop_service_action').listen((_) async {
-    print("Background Service: Recibida acción para detener el servicio.");
-    await flutterLocalNotificationsPlugin.cancel(_notificationId); // Borra la notificación
+  // Función centralizada para detener el servicio
+  Future<void> stopServiceInternal() async {
+    print("Background Service: Deteniendo proceso y cancelando notificaciones.");
+    await flutterLocalNotificationsPlugin.cancel(_notificationId);
     service.stopSelf();
+  }
+
+  // Escuchamos el evento de detener el servicio que viene de la acción de la notificación
+  service.on('stop_service_action').listen((_) {
+    stopServiceInternal();
   });
 
   await flutterLocalNotificationsPlugin.initialize( 
@@ -81,8 +96,7 @@ void onStart(ServiceInstance service) async {
     ),
     onDidReceiveNotificationResponse: (details) {
       if (details.actionId == 'stop_service_action') {
-        // Reenviamos el evento al listener de arriba
-        service.invoke('stop_service_action');
+        stopServiceInternal();
       }
     }, 
   );
@@ -99,6 +113,7 @@ void onStart(ServiceInstance service) async {
           _channelId,
           'Hermodr Background Service',
           ongoing: true, // No se puede quitar deslizando
+          autoCancel: false, // No se quita al pulsarla
           showWhen: false,
           onlyAlertOnce: true, // Evita sonidos/vibración en cada actualización
           icon: '@mipmap/ic_launcher',
@@ -106,10 +121,36 @@ void onStart(ServiceInstance service) async {
             AndroidNotificationAction(
               'stop_service_action',
               'Detener proceso',
+              showsUserInterface: false, // Importante: No abre la app
             ),
           ],
         ),
       ),
+    );
+  }
+
+  // Función para mostrar la notificación emergente de saludo
+  Future<void> showGreetingAlert(String senderName) async {
+    const androidDetails = AndroidNotificationDetails(
+      _alertChannelId,
+      'Saludos recibidos',
+      importance: Importance.max,
+      priority: Priority.high,
+      showWhen: true,
+      icon: '@mipmap/ic_launcher',
+    );
+
+    const notificationDetails = NotificationDetails(
+      android: androidDetails,
+      iOS: DarwinNotificationDetails(),
+    );
+
+    // Usamos un ID basado en el tiempo para que no se sobreescriban si llegan varias
+    await flutterLocalNotificationsPlugin.show(
+      DateTime.now().millisecond,
+      '¡Hermodr!',
+      'Has recibido un saludo de $senderName',
+      notificationDetails,
     );
   }
 
@@ -135,6 +176,11 @@ void onStart(ServiceInstance service) async {
           String color = myConfig['Color'] ?? "Blanco";
           String bandKey = myConfig['BandKey'] ?? "";
 
+          // Obtenemos el nombre del remitente para la notificación
+          var senderDoc = await FirebaseFirestore.instance.collection('users').doc(senderUID).get();
+          String senderName = senderDoc.data()?['Name'] ?? "Alguien";
+
+          // Si es para móvil o pulsera, siempre lanzamos la notificación visual en el teléfono
           if (bandKey.isNotEmpty && bandKey != 'mobile') {
             updateForegroundNotification(content: "¡Saludo recibido! Conectando a pulsera...");
             
@@ -145,8 +191,12 @@ void onStart(ServiceInstance service) async {
             if (targetMac != null && targetMac.isNotEmpty) {
               await _relayToBandFromBackground(targetMac, color);
             }
+          } else if (bandKey == 'mobile') {
+            print("Background Service: Notificación solo móvil detectada.");
           }
           
+          await showGreetingAlert(senderName); // Disparamos la alerta visual/sonora
+
           // Marcar como procesado en Firestore
           await FirebaseFirestore.instance.collection('links').doc(doc.id).update({
             'Message.Sent': false
