@@ -48,6 +48,7 @@ jobs:
           name: Pre-release v0.1.${{ github.run_number }}
           draft: false
           prerelease: true
+          make_latest: true
           # Apuntamos a la ruta del APK combinando el subdirectorio y la salida de Flutter
           files: AppMovil/build/app/outputs/flutter-apk/app-release.apk
         env:
