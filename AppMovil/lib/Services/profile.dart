@@ -28,6 +28,10 @@ class _ProfilePageState extends State<ProfilePage> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancelar")),
           ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFD9E5F8),
+              foregroundColor: const Color(0xFF204173),
+            ),
             onPressed: () async {
               try {
                 if (controller.text.trim().isNotEmpty) {
@@ -113,7 +117,7 @@ class _ProfilePageState extends State<ProfilePage> {
                   children: [
                     CircleAvatar(
                       radius: 60,
-                      backgroundColor: Colors.deepPurple.shade100,
+                      backgroundColor: const Color(0xFFD9E5F8),
                       backgroundImage: profilePicUrl.isNotEmpty
                           ? NetworkImage(profilePicUrl) as ImageProvider
                           : null,
@@ -121,7 +125,7 @@ class _ProfilePageState extends State<ProfilePage> {
                           ? Icon(
                               Icons.person,
                               size: 80,
-                              color: Colors.deepPurple.shade400,
+                              color: Colors.black,
                             )
                           : null,
                     ),
@@ -142,7 +146,7 @@ class _ProfilePageState extends State<ProfilePage> {
                       right: 0,
                       child: Container(
                         padding: const EdgeInsets.all(4),
-                        decoration: const BoxDecoration(color: Colors.deepPurple, shape: BoxShape.circle),
+                        decoration: const BoxDecoration(color: Colors.black, shape: BoxShape.circle),
                         child: const Icon(Icons.edit, size: 20, color: Colors.white),
                       ),
                     ),
@@ -160,7 +164,7 @@ class _ProfilePageState extends State<ProfilePage> {
                       style: const TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.bold,
-                        color: Colors.deepPurple,
+                        color: Colors.black,
                       ),
                     ),
                     const SizedBox(width: 8),

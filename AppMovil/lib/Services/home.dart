@@ -5,7 +5,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'friendpage.dart';
 import 'profile.dart'; // Import the new profile page
 import 'addpage.dart';
@@ -24,13 +26,39 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final String myUID = FirebaseAuth.instance.currentUser!.uid;
   int _selectedIndex = 0;
-  StreamSubscription<QuerySnapshot>? _greetingSubscription;
+  StreamSubscription? _serviceSubscription;
 
   @override
   void initState() {
     super.initState();
+    // Iniciamos el servicio cada vez que se abre la app para asegurar persistencia
+    FlutterBackgroundService().startService();
     _setupNotifications();
-    _listenForGreetings();
+    _requestBluetoothPermissions();
+    
+    // Escuchamos al servicio de segundo plano para mostrar el SnackBar si la app está abierta
+    _serviceSubscription = FlutterBackgroundService().on('on_greeting').listen((event) {
+      if (mounted) {
+        String senderName = event?['senderName'] ?? "Alguien";
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("¡Has recibido un saludo de $senderName!"),
+            backgroundColor: const Color(0xFF204173),
+          ),
+        );
+      }
+    });
+  }
+
+  void _requestBluetoothPermissions() async {
+    // Solicitamos los permisos necesarios para BLE en el hilo de la UI.
+    // Esto evita que el servicio de fondo intente pedirlos y crashee.
+    await [
+      Permission.bluetoothScan,
+      Permission.bluetoothConnect,
+      Permission.locationWhenInUse,
+      Permission.notification, // Fundamental para que el servicio no falle al mostrar la barra
+    ].request();
   }
 
   void _setupNotifications() async {
@@ -53,22 +81,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _listenForGreetings() {
-    _greetingSubscription = FirebaseFirestore.instance
-        .collection('links')
-        .where('Users', arrayContains: myUID)
-        .snapshots()
-        .listen((snapshot) {
-      for (var doc in snapshot.docs) {
-        var data = doc.data() as Map<String, dynamic>;
-        var message = data['Message'];
-        if (message != null && message['Sent'] == true && message['Last_Sent'] != myUID) {
-          _getGreeting(context, message['Last_Sent'], doc.id);
-        }
-      }
-    });
-  }
-
   void _sendGreeting(String docId) async {
     try {
       await FirebaseFirestore.instance.collection('links').doc(docId).update({
@@ -84,136 +96,9 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _getGreeting(BuildContext context, String senderUID, String docId) async {
-    try {
-      // Obtenemos los datos del vínculo y del remitente
-      var linkDoc = await FirebaseFirestore.instance.collection('links').doc(docId).get();
-      var senderDoc = await FirebaseFirestore.instance.collection('users').doc(senderUID).get();
-      
-      if (!mounted) return;
-
-      var linkData = linkDoc.data() as Map<String, dynamic>;
-      var myConfig = linkData['Config_$myUID'] ?? {};
-      String color = myConfig['Color'] ?? "Blanco";
-      String bandKey = myConfig['BandKey'] ?? ""; // Aquí leemos qué pulsera debe vibrar
-      String senderName = senderDoc.exists ? (senderDoc.data() as Map)['Name'] : "Alguien";
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("¡Has recibido un saludo de $senderName!"),
-          backgroundColor: Colors.deepPurple,
-        ),
-      );
-
-      // Si el destino es 'mobile', disparamos notificación de sistema. Si es una pulsera, BLE.
-      if (bandKey == 'mobile') {
-        _showLocalNotification(senderName);
-      } else if (bandKey.isNotEmpty) {
-        _relayToPhysicalBand(bandKey, color);
-      }
-
-      await FirebaseFirestore.instance.collection('links').doc(docId).update({
-        'Message.Sent': false
-      });
-    } catch (e) {
-      print("Error al procesar saludo: $e");
-    }
-  }
-
-  // Función para mostrar una notificación estándar de Android/iOS
-  Future<void> _showLocalNotification(String senderName) async {
-    final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
-    
-    const androidDetails = AndroidNotificationDetails(
-      'greetings_channel',
-      'Saludos recibidos',
-      channelDescription: 'Notificaciones cuando recibes un saludo de un amigo',
-      importance: Importance.max,
-      priority: Priority.high,
-      showWhen: true,
-    );
-
-    const notificationDetails = NotificationDetails(
-      android: androidDetails,
-      iOS: DarwinNotificationDetails(),
-    );
-
-    await flutterLocalNotificationsPlugin.show(
-      DateTime.now().millisecond, // ID único para no sobreescribir anteriores
-      '¡Hermodr!',
-      'Has recibido un saludo de $senderName',
-      notificationDetails,
-    );
-  }
-
-  Future<void> _relayToPhysicalBand(String bandKey, String colorName) async {
-    try {
-      // 1. Buscamos la MAC de esa pulsera en nuestro perfil
-      var userDoc = await FirebaseFirestore.instance.collection('users').doc(myUID).get();
-      var userData = userDoc.data() as Map<String, dynamic>;
-      // Obtenemos la MAC (RemoteId) guardada en el perfil del usuario
-      final String? targetMac = userData[bandKey]?['MAC'];
-
-      if (targetMac == null || targetMac.isEmpty) {
-        print("BLE Error: No hay MAC asociada a la pulsera seleccionada ($bandKey)");
-        return;
-      }
-
-      print("BLE Relay: Iniciando búsqueda de MAC: $targetMac");
-
-      BluetoothDevice? targetDevice;
-
-      // 1. Comprobar si ya está conectado (más rápido)
-      List<BluetoothDevice> connected = FlutterBluePlus.connectedDevices;
-      for (var d in connected) {
-        if (d.remoteId.str.toLowerCase() == targetMac.toLowerCase()) {
-          targetDevice = d;
-          break;
-        }
-      }
-
-      // 2. Si no, escaneamos para encontrarla
-      if (targetDevice == null) {
-        await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
-        await for (var results in FlutterBluePlus.scanResults) {
-          for (ScanResult r in results) {
-            if (r.device.remoteId.str.toLowerCase() == targetMac.toLowerCase()) {
-              targetDevice = r.device;
-              await FlutterBluePlus.stopScan();
-              break;
-            }
-          }
-          if (targetDevice != null) break;
-        }
-      }
-
-      if (targetDevice != null) {
-        // 3. Conectamos y enviamos el color al prototipo
-        await targetDevice.connect(timeout: const Duration(seconds: 5));
-        var services = await targetDevice.discoverServices();
-        for (var s in services) {
-          if (s.uuid.toString().toLowerCase() == SERVICE_UUID.toLowerCase()) {
-            for (var c in s.characteristics) {
-              if (c.uuid.toString().toLowerCase() == CHARACTERISTIC_UUID.toLowerCase()) {
-                await c.write(utf8.encode(colorName));
-                print("BLE Success: Datos enviados a $targetMac");
-              }
-            }
-          }
-        }
-        // Desconectamos para liberar el dispositivo y ahorrar batería
-        await targetDevice.disconnect();
-      } else {
-        print("BLE Error: No se encontró el dispositivo con MAC $targetMac");
-      }
-    } catch (e) {
-      print("Error BLE: $e");
-    }
-  }
-
   @override
   void dispose() {
-    _greetingSubscription?.cancel();
+    _serviceSubscription?.cancel();
     super.dispose();
   }
 
@@ -227,14 +112,16 @@ class _HomeScreenState extends State<HomeScreen> {
     ];
 
     return Scaffold(
-      appBar: AppBar(title: const Text("Envíos")),
-      body: Stack(
-        children: [_pages[_selectedIndex]],
+      backgroundColor: Colors.white,
+      body: SafeArea(
+        child: Stack(
+          children: [_pages[_selectedIndex]],
+        ),
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
         onTap: (index) => setState(() => _selectedIndex = index),
-        selectedItemColor: Colors.deepPurpleAccent,
+        selectedItemColor: const Color(0xFF204173),
         unselectedItemColor: Colors.grey,
         type: BottomNavigationBarType.fixed,
         items: const [
@@ -285,6 +172,10 @@ class BandsMenu extends StatelessWidget {
               });
               if (context.mounted) Navigator.pop(context);
             },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFD9E5F8),
+              foregroundColor: const Color(0xFF204173),
+            ),
             child: const Text("Guardar"),
           ),
         ],
@@ -396,6 +287,7 @@ class BandsMenu extends StatelessWidget {
 
             return Card(
               elevation: 3,
+              color: const Color(0xFFD9E5F8),
               margin: const EdgeInsets.only(bottom: 15),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
               child: Padding(
@@ -404,7 +296,7 @@ class BandsMenu extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        const Icon(Icons.watch_outlined, size: 40, color: Colors.deepPurple),
+                        const Icon(Icons.watch_outlined, size: 40, color: Colors.black),
                         const SizedBox(width: 15),
                         Expanded(
                           child: InkWell( // Click en el nombre
@@ -417,7 +309,7 @@ class BandsMenu extends StatelessWidget {
                                 children: [
                                   Row(
                                     children: [
-                                      Text(bName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                                      Text(bName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.black)),
                                       const SizedBox(width: 5),
                                       const Icon(Icons.edit, size: 14, color: Colors.grey),
                                     ],
@@ -438,6 +330,10 @@ class BandsMenu extends StatelessWidget {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFD9E5F8),
+                          foregroundColor: const Color(0xFF204173),
+                        ),
                         icon: const Icon(Icons.sync),
                         onPressed: () => _showFriendSelector(context, key),
                         label: FutureBuilder<String>(

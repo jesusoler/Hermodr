@@ -10,6 +10,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:flutter_background_service_android/flutter_background_service_android.dart';
 import '../firebase_options.dart' as firebase_options;
 
 // Identificadores constantes
@@ -29,7 +30,7 @@ Future<void> initializeService() async {
     _channelId,
     'Hermodr Background Service',
     description: 'Mantiene la escucha de saludos activa para las pulseras.',
-    importance: Importance.low,
+    importance: Importance.high, // Aumentamos la importancia para que sea más difícil de matar
   );
 
   const AndroidNotificationChannel alertChannel = AndroidNotificationChannel(
@@ -69,14 +70,67 @@ Future<void> initializeService() async {
 
 @pragma('vm:entry-point')
 void onStart(ServiceInstance service) async {
+  if (service is AndroidServiceInstance) {
+    // Esto debe ser lo primero que se ejecute
+    service.setAsForegroundService();
+  }
+
   DartPluginRegistrant.ensureInitialized();
 
-  // Inicializar Firebase dentro del Isolate del servicio
-  await Firebase.initializeApp(
-    options: firebase_options.DefaultFirebaseOptions.currentPlatform,
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+  // Definición de la notificación (Mantenida igual pero movida arriba)
+  void updateForegroundNotification({String? title, String? content}) {
+    flutterLocalNotificationsPlugin.show(
+      _notificationId,
+      title ?? 'Hermodr (Activo)',
+      content ?? 'Buscando mensajes...',
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          _channelId,
+          'Hermodr Background Service',
+          priority: Priority.high,
+          importance: Importance.high,
+          ongoing: true,
+          autoCancel: false,
+          showWhen: false,
+          onlyAlertOnce: true,
+          icon: '@mipmap/ic_launcher',
+          actions: [
+            AndroidNotificationAction(
+              'stop_service_action',
+              'Detener proceso',
+              showsUserInterface: false,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // 1. Inicializar notificaciones y mostrar la notificación persistente INMEDIATAMENTE.
+  // Esto soluciona el error "ForegroundServiceDidNotStartInTimeException".
+  await flutterLocalNotificationsPlugin.initialize( 
+    const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+    ),
+    onDidReceiveNotificationResponse: (details) {
+      if (details.actionId == 'stop_service_action') {
+        service.stopSelf();
+      }
+    }, 
   );
 
-  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+  updateForegroundNotification();
+
+  // 2. Inicializar Firebase ahora que ya estamos seguros en foreground.
+  try {
+    await Firebase.initializeApp(
+      options: firebase_options.DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (e) {
+    print("Error inicializando Firebase en Background: $e");
+  }
 
   // Función centralizada para detener el servicio
   Future<void> stopServiceInternal() async {
@@ -89,46 +143,6 @@ void onStart(ServiceInstance service) async {
   service.on('stop_service_action').listen((_) {
     stopServiceInternal();
   });
-
-  await flutterLocalNotificationsPlugin.initialize( 
-    const InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-    ),
-    onDidReceiveNotificationResponse: (details) {
-      if (details.actionId == 'stop_service_action') {
-        stopServiceInternal();
-      }
-    }, 
-  );
-
-  void updateForegroundNotification({String? title, String? content}) {
-    // En lugar de service.setNotificationInfo, usamos el plugin directamente
-    // para poder incluir el botón de acción (AndroidNotificationAction)
-    flutterLocalNotificationsPlugin.show(
-      _notificationId,
-      title ?? 'Hermodr (Activo)',
-      content ?? 'Buscando mensajes...',
-      const NotificationDetails(
-        android: AndroidNotificationDetails(
-          _channelId,
-          'Hermodr Background Service',
-          ongoing: true, // No se puede quitar deslizando
-          autoCancel: false, // No se quita al pulsarla
-          showWhen: false,
-          onlyAlertOnce: true, // Evita sonidos/vibración en cada actualización
-          icon: '@mipmap/ic_launcher',
-          actions: [
-            AndroidNotificationAction(
-              'stop_service_action',
-              'Detener proceso',
-              showsUserInterface: false, // Importante: No abre la app
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   // Función para mostrar la notificación emergente de saludo
   Future<void> showGreetingAlert(String senderName) async {
     const androidDetails = AndroidNotificationDetails(
@@ -176,26 +190,26 @@ void onStart(ServiceInstance service) async {
           String color = myConfig['Color'] ?? "Blanco";
           String bandKey = myConfig['BandKey'] ?? "";
 
-          // Obtenemos el nombre del remitente para la notificación
-          var senderDoc = await FirebaseFirestore.instance.collection('users').doc(senderUID).get();
-          String senderName = senderDoc.data()?['Name'] ?? "Alguien";
+          try {
+            // Obtenemos el nombre del remitente
+            var senderDoc = await FirebaseFirestore.instance.collection('users').doc(senderUID).get();
+            String senderName = senderDoc.data()?['Name'] ?? "Alguien";
 
-          // Si es para móvil o pulsera, siempre lanzamos la notificación visual en el teléfono
-          if (bandKey.isNotEmpty && bandKey != 'mobile') {
-            updateForegroundNotification(content: "¡Saludo recibido! Conectando a pulsera...");
-            
-            // Obtener MAC del usuario
-            var userDoc = await FirebaseFirestore.instance.collection('users').doc(myUID).get();
-            String? targetMac = userDoc.data()?[bandKey]?['MAC'];
-
-            if (targetMac != null && targetMac.isNotEmpty) {
-              await _relayToBandFromBackground(targetMac, color);
+            // 1. Lógica de Hardware (Solo si no es 'mobile')
+            if (bandKey.isNotEmpty && bandKey != 'mobile') {
+              var userDoc = await FirebaseFirestore.instance.collection('users').doc(myUID).get();
+              String? targetMac = userDoc.data()?[bandKey]?['MAC'];
+              if (targetMac != null && targetMac.isNotEmpty) {
+                _relayToBandFromBackground(targetMac, color); // Disparamos sin esperar (async)
+              }
             }
-          } else if (bandKey == 'mobile') {
-            print("Background Service: Notificación solo móvil detectada.");
+
+            // 2. Lógica de Notificación (Siempre, tanto para móvil como pulsera)
+            service.invoke('on_greeting', {'senderName': senderName});
+            await showGreetingAlert(senderName);
+          } catch (e) {
+            print("Error procesando saludo en background: $e");
           }
-          
-          await showGreetingAlert(senderName); // Disparamos la alerta visual/sonora
 
           // Marcar como procesado en Firestore
           await FirebaseFirestore.instance.collection('links').doc(doc.id).update({
@@ -207,7 +221,8 @@ void onStart(ServiceInstance service) async {
     });
   }
 
-  Timer.periodic(const Duration(seconds: 10), (timer) async {
+  // Aumentamos el intervalo a 30 segundos para reducir el consumo y evitar que el SO lo mate por uso excesivo
+  Timer.periodic(const Duration(seconds: 30), (timer) async {
     if (service is AndroidServiceInstance) {
       if (!(await service.isForegroundService())) {
         greetingSubscription?.cancel();
@@ -218,7 +233,7 @@ void onStart(ServiceInstance service) async {
     // Mantenemos la notificación visible y actualizada
     updateForegroundNotification();
 
-    // Intentamos conectar y escuchar las pulseras registradas que no estén activas
+    // Intentamos mantener la conexión SOLO para las pulseras que envían mensajes (tienen Destiny_LinkID)
     if (myUID != null) {
       _monitorBandsForInput(myUID);
     }
@@ -252,10 +267,23 @@ Future<void> _monitorBandsForInput(String myUID) async {
 /// Conecta a la pulsera y se suscribe a las notificaciones del botón
 Future<void> _listenToBandButton(String mac, String destinyLink, String myUID) async {
   BluetoothDevice? device;
+  
   try {
-    // Buscar dispositivo
+    // 1. Verificar si ya está conectado para evitar escaneos innecesarios
+    List<BluetoothDevice> connected = FlutterBluePlus.connectedDevices;
+    for (var d in connected) {
+      if (d.remoteId.str.toLowerCase() == mac.toLowerCase()) {
+        device = d;
+        break;
+      }
+    }
+
+    // 2. Si no está conectado, buscarlo brevemente
+    if (device == null) {
     await FlutterBluePlus.startScan(timeout: const Duration(seconds: 2));
-    await for (var results in FlutterBluePlus.scanResults) {
+      
+      // Esperamos resultados de forma síncrona para no bloquear el flujo
+      await for (var results in FlutterBluePlus.scanResults.timeout(const Duration(seconds: 2), onTimeout: (sink) => sink.close())) {
       for (var r in results) {
         if (r.device.remoteId.str.toLowerCase() == mac.toLowerCase()) {
           device = r.device;
@@ -265,6 +293,7 @@ Future<void> _listenToBandButton(String mac, String destinyLink, String myUID) a
       if (device != null) break;
     }
     await FlutterBluePlus.stopScan();
+    }
 
     if (device != null) {
       await device.connect(autoConnect: true);
@@ -306,21 +335,39 @@ Future<void> _listenToBandButton(String mac, String destinyLink, String myUID) a
 Future<void> _relayToBandFromBackground(String mac, String color) async {
   try {
     BluetoothDevice? device;
-    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 4));
-    await for (var results in FlutterBluePlus.scanResults) {
+
+    // 1. ¿Ya estamos conectados por la escucha del botón?
+    List<BluetoothDevice> connected = FlutterBluePlus.connectedDevices;
+    for (var d in connected) {
+      if (d.remoteId.str.toLowerCase() == mac.toLowerCase()) {
+        device = d;
+        break;
+      }
+    }
+
+    // 2. Si no, escaneo rápido
+    if (device == null) {
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 3));
+      await for (var results in FlutterBluePlus.scanResults.timeout(const Duration(seconds: 3), onTimeout: (sink) => sink.close())) {
       for (var r in results) {
         if (r.device.remoteId.str.toLowerCase() == mac.toLowerCase()) {
           device = r.device;
+          break;
+        }
+      }
+        if (device != null) {
           await FlutterBluePlus.stopScan();
           break;
         }
       }
-      if (device != null) break;
     }
 
     if (device != null) {
-      await device.connect();
-      var services = await device.discoverServices();
+      if (!device.isConnected) {
+        await device.connect(timeout: const Duration(seconds: 4));
+      }
+      
+      List<BluetoothService> services = await device.discoverServices();
       for (var s in services) {
         if (s.uuid.toString().toLowerCase() == SERVICE_UUID.toLowerCase()) {
           for (var c in s.characteristics) {
@@ -330,7 +377,8 @@ Future<void> _relayToBandFromBackground(String mac, String color) async {
           }
         }
       }
-      await device.disconnect();
+      // IMPORTANTE: Solo desconectar si NO estamos escuchando el botón (Destiny_LinkID vacío)
+      // Pero para simplificar el prototipo, mejor no desconectar abruptamente.
     }
   } catch (e) {
     print("Background BLE Error: $e");

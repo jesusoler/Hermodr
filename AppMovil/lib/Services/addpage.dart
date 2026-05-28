@@ -36,6 +36,10 @@ class _AddPageState extends State<AddPage> {
             child: const Text("Cancelar"),
           ),
           ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFD9E5F8),
+              foregroundColor: const Color(0xFF204173),
+            ),
             onPressed: () async {
               Navigator.pop(context);
               await openAppSettings(); // Abre la configuración del sistema
@@ -245,7 +249,14 @@ class _AddPageState extends State<AddPage> {
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancelar")),
-          ElevatedButton(onPressed: _sendRequest, child: const Text("Enviar")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFD9E5F8),
+              foregroundColor: const Color(0xFF204173),
+            ),
+            onPressed: _sendRequest, 
+            child: const Text("Enviar")
+          ),
         ],
       ),
     );
@@ -269,12 +280,17 @@ class _AddPageState extends State<AddPage> {
               itemBuilder: (context, index) {
                 final res = _scanResults[index];
                 return Card(
+                  color: const Color(0xFFD9E5F8),
                   margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                   child: ListTile(
                     leading: const Icon(Icons.bluetooth),
                     title: Text(res.device.platformName),
                     subtitle: Text(res.device.remoteId.str),
                     trailing: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFD9E5F8),
+                        foregroundColor: const Color(0xFF204173),
+                      ),
                       onPressed: () => _connectAndAddBand(res.device),
                       child: const Text("Vincular"),
                     ),
@@ -326,16 +342,16 @@ class _AddPageState extends State<AddPage> {
       child: Container(
         width: double.infinity,
         decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
+          color: const Color(0xFFD9E5F8),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color, width: 2),
+          border: Border.all(color: const Color(0xFF204173), width: 2),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 60, color: color),
+            Icon(icon, size: 60, color: const Color(0xFF204173)),
             const SizedBox(height: 10),
-            Text(title, style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: color)),
+            Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF204173))),
           ],
         ),
       ),

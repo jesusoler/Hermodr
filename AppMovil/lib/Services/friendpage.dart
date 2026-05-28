@@ -116,6 +116,32 @@ class FriendPage extends StatelessWidget {
             },
           ),
           actions: [
+            TextButton(
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (confirmCtx) => AlertDialog(
+                    title: const Text("Eliminar Amigo"),
+                    content: const Text("¿Estás seguro de que quieres eliminar a este amigo? Se borrará vuestro vínculo."),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(confirmCtx),
+                        child: const Text("Cancelar"),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          await FirebaseFirestore.instance.collection('links').doc(linkID).delete();
+                          if (confirmCtx.mounted) Navigator.pop(confirmCtx);
+                          if (context.mounted) Navigator.pop(context);
+                        },
+                        child: const Text("Eliminar", style: TextStyle(color: Colors.red)),
+                      ),
+                    ],
+                  ),
+                );
+              },
+              child: const Text("Eliminar Amigo", style: TextStyle(color: Colors.red)),
+            ),
             TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cerrar")), // Botón para cerrar el diálogo
           ],
         );
@@ -190,11 +216,11 @@ class FriendPage extends StatelessWidget {
 
             return Card(
               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              color: Colors.amber.shade50, 
+              color: const Color(0xFFD9E5F8), 
               child: ListTile(
                 onTap: () => _showRequestsDialog(context, snapshot.data!.docs),
                 leading: const CircleAvatar(
-                  backgroundColor: Colors.amber,
+                  backgroundColor: Colors.black,
                   child: Icon(Icons.notifications_active, color: Colors.white),
                 ),
                 title: const Text("Solicitudes de amistad"),
@@ -254,6 +280,7 @@ class FriendPage extends StatelessWidget {
 
                       // Nuevo diseño para cada amigo
                       return Card(
+                        color: const Color(0xFFD9E5F8),
                         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         child: Padding(
                           padding: const EdgeInsets.all(8.0),
@@ -267,7 +294,7 @@ class FriendPage extends StatelessWidget {
                                   children: [
                                     Text(
                                       friendName,
-                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.black),
                                       textAlign: TextAlign.left,
                                     ),
                                     const SizedBox(height: 8),
@@ -280,7 +307,7 @@ class FriendPage extends StatelessWidget {
                                 height: 70, // Altura fija para el área del botón
                                 alignment: Alignment.center,
                                 child: IconButton(
-                                  icon: const Icon(Icons.send, color: Colors.deepPurpleAccent, size: 30),
+                                  icon: const Icon(Icons.send, color: Color(0xFF204173), size: 30),
                                   onPressed: () => onSendGreeting(docId),
                                 ),
                               ),
@@ -325,6 +352,12 @@ class _FriendLinkControls extends StatelessWidget {
             if (!linkSnap.hasData || !linkSnap.data!.exists) return const SizedBox.shrink();
             var config = linkSnap.data!['Config_$myUID'] as Map<String, dynamic>? ?? {};
             String selectedBandKey = config['BandKey'] ?? "";
+            
+            // Validación: Si la pulsera seleccionada no existe en las pulseras actuales
+            // del usuario, forzamos el valor a 'mobile' para evitar el crash.
+            String dropdownValue = (selectedBandKey == 'mobile' || bandKeys.contains(selectedBandKey)) 
+                ? (selectedBandKey.isEmpty ? 'mobile' : selectedBandKey) 
+                : 'mobile';
 
             return Row(
               mainAxisAlignment: MainAxisAlignment.start, // Alinea los controles al inicio
@@ -332,7 +365,7 @@ class _FriendLinkControls extends StatelessWidget {
                 Expanded( // Dropdown para la selección de pulsera
                   child: DropdownButton<String>(
                     isExpanded: true,
-                    value: selectedBandKey.isEmpty ? 'mobile' : selectedBandKey,
+                    value: dropdownValue,
                     hint: const Text("Seleccionar pulsera"),
                     items: [
                       const DropdownMenuItem(value: 'mobile', child: Text("Solo móvil")),
