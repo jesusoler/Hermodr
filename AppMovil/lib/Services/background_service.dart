@@ -249,13 +249,32 @@ Future<void> _monitorBandsForInput(String myUID) async {
     var userData = userDoc.data() as Map<String, dynamic>;
     var bandKeys = userData.keys.where((k) => k.startsWith('Band')).toList();
 
+    Set<String> activeMacsInFirestore = {};
+
     for (String key in bandKeys) {
       String? mac = userData[key]['MAC'];
       String? destinyLink = userData[key]['Destiny_LinkID'];
 
       if (mac != null && mac.isNotEmpty && destinyLink != null && destinyLink.isNotEmpty) {
+        activeMacsInFirestore.add(mac.toLowerCase());
         if (!_activeSubscriptions.containsKey(mac)) {
           _listenToBandButton(mac, destinyLink, myUID);
+        }
+      }
+    }
+
+    // Limpieza de suscripciones y conexiones que ya no existen en Firestore
+    final activeMacs = _activeSubscriptions.keys.toList();
+    for (var mac in activeMacs) {
+      if (!activeMacsInFirestore.contains(mac.toLowerCase())) {
+        print("Cerrando conexión BLE para pulsera eliminada o desvinculada: $mac");
+        _activeSubscriptions.remove(mac)?.cancel();
+
+        // Intentar desconectar físicamente el dispositivo para ahorrar batería
+        for (var device in FlutterBluePlus.connectedDevices) {
+          if (device.remoteId.str.toLowerCase() == mac.toLowerCase()) {
+            device.disconnect();
+          }
         }
       }
     }
